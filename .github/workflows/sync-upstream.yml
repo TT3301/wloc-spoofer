@@ -1,0 +1,66 @@
+name: Sync upstream worker folder
+
+on:
+  schedule:
+    - cron: '0 */6 * * *'
+  workflow_dispatch:
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout target repo
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+
+      - name: Download upstream archive
+        run: |
+          curl -sL https://github.com/Yu9191/wloc/archive/refs/heads/main.tar.gz -o upstream.tar.gz
+          tar -xzf upstream.tar.gz
+          if [ ! -d "wloc-main/worker" ]; then
+            echo "::error::Upstream 'worker/' folder not found in Yu9191/wloc"
+            exit 1
+          fi
+          echo "✅ Upstream worker folder found"
+
+      - name: Backup protected files
+        run: |
+          if [ -f "wrangler.jsonc" ]; then
+            cp wrangler.jsonc /tmp/wrangler.jsonc.local
+          fi
+
+      - name: Replace with upstream worker content
+        run: |
+          shopt -s dotglob nullglob
+          for item in ./* ./.[!.]*; do
+            name=$(basename "$item")
+            if [[ "$name" != ".git" && "$name" != ".github" && "$name" != "upstream.tar.gz" && "$name" != "wloc-main" ]]; then
+              rm -rf "$item"
+            fi
+          done
+          cp -a wloc-main/worker/. ./
+          rm -rf wloc-main upstream.tar.gz
+
+      - name: Restore protected files
+        run: |
+          if [ -f "/tmp/wrangler.jsonc.local" ]; then
+            cp /tmp/wrangler.jsonc.local wrangler.jsonc
+            echo "✅ Restored local wrangler.jsonc (protects Worker name)"
+          fi
+
+      - name: Commit and push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "✅ Already in sync, no changes to commit"
+          else
+            git commit -m "chore: sync upstream worker from Yu9191/wloc"
+            git push origin main
+            echo "🚀 Pushed - Cloudflare will auto-deploy"
+          fi
